@@ -37,11 +37,11 @@ BUTTON_CLICKS = {
         "intent": Intent.GREETING,
         "message": (
             "You are now in **Model Inventory** mode. "
-            "I can help you with:\n"
-            "- Count of models by LOB, Function, Status\n"
-            "- Live vs WIP model breakdown\n"
-            "- Model ownership and timelines\n"
-            "- Documentation availability\n\n"
+            "I can help you with the questions similar to:\n"
+            "- Can you share me the count of Models across all LOBs?\n"
+            "- Can you share me break up of the Models across LOB?\n"
+            "- Hi, I am a new joinee at ABSLAMC, can you tell me which all models are created by my team?\n"
+            "- Hi, I am an existing ABCD member, can you tell me how many models are created by my team and across which functions?\n\n"
             "What would you like to know?"
         )
     },
@@ -50,10 +50,10 @@ BUTTON_CLICKS = {
         "message": (
             "You are now in **Model Documentation** mode. "
             "I can help you with:\n"
-            "- Model methodology and approach\n"
-            "- How specific models work\n"
-            "- Process explanations\n"
-            "- Technical documentation\n\n"
+            "- Can you give me overview of the ABHI_FLS Attrition Prediction?\n"
+            "- Can you share explainability & insights about the model?\n"
+            "- Give me the objective of  ABSLAMC_SIP Cancellation_V1\n"
+            "- Can you share details of Methodology used for this model?\n\n"
             "What would you like to know?"
         )
     },
@@ -62,9 +62,9 @@ BUTTON_CLICKS = {
         "message": (
             "You are now in **Standards & Best Practices** mode. "
             "I can help you with:\n"
-            "- Analytics standards and guidelines\n"
-            "- Best practices for model development\n"
-            "- Policy and compliance content\n\n"
+            "- What is MLOps?\n"
+            "- What are the Key Pillars of MLOps\n"
+            "- How do I implement Model Monitoring?\n\n"
             "What would you like to know?"
         )
     },
@@ -87,10 +87,9 @@ BUTTON_CLICKS = {
 
 GREETING_PATTERNS = [
     "hi", "hello", "hey", "good morning", "good afternoon",
-    "good evening", "good night", "how are you", "what can you do",
-    "who are you", "help", "what do you do", "thanks", "thank you",
-    "bye", "goodbye", "ok", "okay", "sure", "great", "awesome",
-    "nice", "cool", "got it", "understood", "welcome",
+    "good evening", "good night", "how are you"
+    "who are you", "thanks", "thank you",
+    "bye", "goodbye"
 ]
 
 # ------------------------------------------------------------------------------
@@ -111,13 +110,15 @@ You are an intent classifier for a COE Analytics chatbot with THREE intents:
 3. RAG (Vector Store) - Internal documents about analytics methodologies,
    model processes, documentation content, company policies.
 
-ALWAYS ROUTE TO GREETING for:
+ALWAYS ROUTE TO GREETING at the start of the session only for:
 - Hi, Hello, Hey, Good morning/afternoon/evening
 - How are you, What can you do, Who are you
 - Thank you, Thanks, Bye, Goodbye
 - Button clicks: "Model Inventory", "Model Documentation",
   "Standards & Best Practices", "Enterprise Reports & Dashboards Inventory"
 - Any vague or non-specific message
+-Short conversational responses like "yes", "no", "sure","please", "tell me more","show me",
+"list them","go ahead" should NEVER be classified as GREETING. Always use the previous intent context. 
 
 ALWAYS ROUTE TO INVENTORY for ANY question that involves:
 - Counting models: "how many", "count", "total", "number of"
@@ -127,33 +128,39 @@ ALWAYS ROUTE TO INVENTORY for ANY question that involves:
 - Filtering by LOB: SLI, AMC, HI, HFC, Life Insurance, Mutual Funds, etc.
 - Filtering by Function: Cross-Sell, HR, Fraud, etc.
 - Model details from the inventory: timeline, documentation availability
-
 ONLY ROUTE TO RAG for questions about:
 - How a model works technically
 - Methodology or approach used
 - Process explanations
 - Policy or guideline content
 - Concepts that require reading a document
+- If details or exhaustive details are asked for a particular model
+- If the details of a single model is asked like details, methodology or overview with no aggregation intent in the question  
 
 CRITICAL EXAMPLES:
-"Hi"                                          -> GREETING
-"Hello"                                       -> GREETING
-"Good afternoon"                              -> GREETING
-"What can you help me with?"                  -> GREETING
-"Model Inventory"                             -> GREETING
-"Model Documentation"                         -> GREETING
-"Standards & Best Practices"                  -> GREETING
-"Enterprise Reports & Dashboards Inventory"   -> GREETING
-"How many live models are there in SLI?"      -> INVENTORY
-"How many models does Life Insurance have?"   -> INVENTORY
-"List all live SLI models"                    -> INVENTORY
-"How many WIP models are in Cross-Sell?"      -> INVENTORY
-"Which AMC models have documentation?"        -> INVENTORY
-"Who owns the fraud detection model?"         -> INVENTORY
-"How many models are live?"                   -> INVENTORY
-"How does the persistency model work?"        -> RAG
-"What methodology is used for fraud?"         -> RAG
-"Explain the churn prediction approach"       -> RAG
+"Hi"                                                -> GREETING
+"Hello"                                             -> GREETING
+"Good afternoon"                                    -> GREETING
+"What can you help me with?"                        -> GREETING
+"Model Inventory"                                   -> GREETING
+"Model Documentation"                               -> GREETING
+"Standards & Best Practices"                        -> GREETING
+"Enterprise Reports & Dashboards Inventory"         -> GREETING
+"How many live models are there in SLI?"            -> INVENTORY
+"How many models does Life Insurance have?"         -> INVENTORY
+"List all live SLI models"                          -> INVENTORY
+"How many WIP models are in Cross-Sell?"            -> INVENTORY
+"Which AMC models have documentation?"              -> INVENTORY
+"Who owns the fraud detection model?"               -> INVENTORY
+"How many models are live?"                         -> INVENTORY
+"How does the persistency model work?"              -> RAG
+"What methodology is used for fraud?"               -> RAG
+"Explain the churn prediction approach"             -> RAG
+"Give me details of the model App-Digi Intent model"-> RAG
+"Can You compare the 2 ABCD models - 'App - PL Intent Model' and 'App - HFL Intent Model'" -> RAG
+"Please share exhaustive details like Business Objective, Target Variable, Variables Used for theApp - MF Intent Model created by ABCD team" -> RAG
+"Can You give me overview of the  PL Intent model created by the ABCD team?" -> RAG
+"Can you share the Methodology used for this model?" -> RAG
 
 Return valid JSON only in this format:
 {"intent": "GREETING" or "INVENTORY" or "RAG", "reasoning": "your reasoning here"}
@@ -166,10 +173,12 @@ Return valid JSON only in this format:
 GENERAL_GREETING_RESPONSE = (
     "Hello! I am Converge Knowledge, your COE Analytics AI assistant. "
     "I can help you with:\n\n"
-    "📊 **Model Inventory** — Count, list, and filter AI/ML models "
+    "**Model Inventory** — Count, list, and filter AI/ML models "
     "by LOB, function, status, owner, and timeline.\n\n"
-    "📄 **Model Documentation** — Learn how models work, their "
+    "**Model Documentation** — Learn how models work, their "
     "methodology, processes, and business objectives.\n\n"
+    "**MLOps framework** — Learn how to operationalize ML models in production "
+    "by orchestration, monitoring & governance.\n\n"
     "What would you like to explore today?"
 )
 
