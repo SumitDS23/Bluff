@@ -107,11 +107,13 @@ def get_session(chat_id: str) -> dict:
             "last_intent":     "",
             "chat":            [],   # RAG history (tuples)
             "last_subjects":   [],   # entities for cross-intent resolution
+            "last_offer":      None, # tracks what bot offered (for yes/no handling)
         }
     return session_store[chat_id]
 
 def update_session(chat_id: str, filters: dict, history: list,
-                   intent: str, chat: list, last_subjects: list = None):
+                   intent: str, chat: list, last_subjects: list = None,
+                   last_offer: dict = None):
     existing = session_store.get(chat_id, {})
     session_store[chat_id] = {
         "filters":         filters,
@@ -119,6 +121,7 @@ def update_session(chat_id: str, filters: dict, history: list,
         "last_intent":     intent,
         "chat":            chat[-10:],
         "last_subjects":   (last_subjects or existing.get("last_subjects", []))[-5:],
+        "last_offer":      last_offer,  # None or {"type": "list_models", "data": {...}}
     }
 
 def clear_session(chat_id: str):
@@ -313,6 +316,54 @@ def query(request: QueryRequest):
         # and inventory filters. Solves all cross-intent follow-ups.
         from rag.chain import rewrite_query_with_context
 
+        # ── Step 2a: Check for affirmative/negative responses ─────────────
+        # If bot offered something and user responds with yes/no/sure/etc.
+        question_lower = question.strip().lower()
+        affirmative_patterns = [
+            "yes", "yeah", "yep", "sure", "ok", "okay", "go ahead", 
+            "please", "show me", "list them", "tell me", "give me",
+            "i would", "i'd like", "sounds good"
+        ]
+        negative_patterns = [
+            "no", "nope", "nah", "not now", "skip", "later", 
+            "don't", "do not", "never mind"
+        ]
+        
+        is_affirmative = any(p in question_lower for p in affirmative_patterns)
+        is_negative = any(p in question_lower for p in negative_patterns)
+        is_short_response = len(question.strip().split()) <= 3
+        
+        # If user responds affirmatively/negatively to a bot offer
+        if session.get("last_offer") and is_short_response and (is_affirmative or is_negative):
+            
+            if is_negative:
+                # User declined the offer
+                session["last_offer"] = None
+                return format_response(
+                    chat_id=chat_id, msg_id=msg_id,
+                    question=question, intent="GREETING",
+                    answer="No problem! Let me know if you need anything else.",
+                    citations=[], is_intent_switch=False, user_id=user_id,
+                )
+            
+            # User accepted the offer — reconstruct the query
+            offer = session["last_offer"]
+            if offer["type"] == "list_models":
+                # Reconstruct query: "List [models from previous context]"
+                filters_str = ", ".join(f"{k}={v}" for k, v in offer["filters"].items() if v)
+                reconstructed_query = f"List models with filters: {filters_str}"
+                logger.info(f"[{chat_id}] Affirmative response → reconstructing: '{reconstructed_query}'")
+                question = reconstructed_query
+                session["last_offer"] = None  # Clear offer after accepting
+            
+            elif offer["type"] == "more_details":
+                # User wants more details about specific model/topic
+                subject = offer.get("subject", "")
+                reconstructed_query = f"Give me more details about {subject}"
+                logger.info(f"[{chat_id}] Affirmative response → reconstructing: '{reconstructed_query}'")
+                question = reconstructed_query
+                session["last_offer"] = None
+
         # Combine history for rewriter context
         combined_history = []
         # Add RAG history as tuples
@@ -368,7 +419,7 @@ def query(request: QueryRequest):
                 )
 
             from rag.inventory import run_inventory_query
-            answer, df, filters, topic_shift, parsed, usage = run_inventory_query(
+            answer, df, filters, topic_shift, parsed, usage, offer = run_inventory_query(
                 question=question,
                 accumulated_filters=session["filters"],
                 turn_history=session["history"],
@@ -419,6 +470,7 @@ def query(request: QueryRequest):
                 intent=intent,
                 chat=session["chat"],
                 last_subjects=merged_subjects,
+                last_offer=offer,  # Track offer if bot asked "want more details?"
             )
 
             return format_response(
@@ -441,7 +493,7 @@ def query(request: QueryRequest):
 
             # The rewritten query already includes resolution of
             # pronouns and cross-intent context. Pass it to run_rag.
-            answer, docs, usage = run_rag(
+            answer, docs, usage, offer = run_rag(
                 chain=chain,
                 retriever=retriever,
                 question=question,
@@ -469,6 +521,7 @@ def query(request: QueryRequest):
                 intent=intent,
                 chat=session["chat"] + [(question, answer)],
                 last_subjects=session.get("last_subjects", []),
+                last_offer=offer,  # Track RAG offers too
             )
 
             return format_response(
