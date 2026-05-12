@@ -90,10 +90,13 @@ CRITICAL RULES (NON-NEGOTIABLE):
 - Never use Markdown pipe tables.
 - For missing values write "Not specified in retrieved documents".
 
-8. CONVERSATIONAL FLOW
+8. CONVERSATIONAL TONE — NO FOLLOW-UP QUESTIONS
 - Professional analytical tone.
-- 2-4 sentences for simple queries; structured detail for complex ones.
-- Do NOT ask follow-up questions or offer breakdowns. Answer what was asked.
+- Answer the question completely in 2-4 sentences for simple queries; structured detail for complex ones.
+- Do NOT ask follow-up questions like "Would you like more details?", "Want me to explain further?", "Need more information?", "Shall I elaborate?"
+- Do NOT offer to provide additional information.
+- Simply provide a complete, thorough answer to what was asked.
+- Let the user decide what to ask next.
 """
 
 
@@ -255,7 +258,7 @@ def rerank_docs(query: str, docs: list, top_k: int = 5) -> list:
 # Main RAG runner
 # ──────────────────────────────────────────────────────────────────────────
 def run_rag(chain, retriever, question: str, history: list,
-            rewritten_query: str = None) -> tuple[str, list, dict]:
+            rewritten_query: str = None) -> tuple[str, list, dict, dict]:
     """
     Run RAG with semantic rewriting + reranking.
 
@@ -264,7 +267,7 @@ def run_rag(chain, retriever, question: str, history: list,
                          If None, falls back to using question as-is.
 
     Returns:
-        (answer, docs, usage_dict)
+        (answer, docs, usage_dict, offer_dict_or_None)
     """
     from langchain_core.messages import HumanMessage, AIMessage
 
@@ -338,4 +341,25 @@ def run_rag(chain, retriever, question: str, history: list,
     else:
         response_text = response_obj
 
-    return str(response_text).strip(), docs, usage
+    # Detect if answer contains an offer
+    offer = None
+    answer_lower = str(response_text).lower()
+    if any(phrase in answer_lower for phrase in [
+        "would you like", "want me to", "shall i", "do you want",
+        "interested in", "need more", "like to know more",
+        "would that help", "want to explore", "let me know if"
+    ]):
+        # Extract what was being discussed (from last question or model name in context)
+        subject = "this topic"
+        if history:
+            last_q = history[-1][0] if history[-1] else ""
+            # Try to extract model name or topic from last question
+            if "model" in last_q.lower():
+                subject = last_q
+        
+        offer = {
+            "type": "more_details",
+            "subject": subject,
+        }
+
+    return str(response_text).strip(), docs, usage, offer
