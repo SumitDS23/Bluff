@@ -523,7 +523,9 @@ def generate_nl_response(question: str, result_df: pd.DataFrame,
                           turn_history: list, final_filters: dict,
                           sql_used: str) -> tuple:
     """
-    Generate natural language response. Returns (answer_string, usage_dict).
+    Generate natural language response. Returns (answer_string, usage_dict, offer_dict_or_None).
+    
+    offer_dict format: {"type": "list_models", "filters": {...}} or None
     """
     client = _get_azure_client()
 
@@ -575,8 +577,8 @@ Respond in natural, conversational language:
 - Never mention SQL, DuckDB, DataFrames, or technical internals.
 - Keep it concise — 2 to 4 sentences max unless describing a specific model.
 - Do NOT include the table in your response — it will be appended separately.
-- DO NOT ask follow-up questions or offer further breakdowns. Just answer what was asked.
-  Let the user decide what to ask next.
+- Do NOT ask follow-up questions like "Would you like more details?" or "Want me to list them?"
+  Just provide the answer directly. Let the user decide what to ask next.
 """
 
     try:
@@ -591,7 +593,23 @@ Respond in natural, conversational language:
             "completion_tokens": response.usage.completion_tokens if response.usage else 0,
             "total_tokens": response.usage.total_tokens if response.usage else 0,
         }
-        return answer, usage
+        
+        # Detect if answer contains an offer (despite instructions not to)
+        offer = None
+        answer_lower = answer.lower()
+        if any(phrase in answer_lower for phrase in [
+            "would you like", "want me to", "shall i", "do you want",
+            "interested in", "need more", "like to see"
+        ]):
+            # Bot made an offer — track it
+            offer = {
+                "type": "more_details",
+                "subject": final_filters.get("model_name", "these models"),
+                "filters": final_filters,
+            }
+        
+        return answer, usage, offer
+        
     except Exception as e:
         logger.error(f"NL response failed: {e}")
         fallback_answer = ""
@@ -601,7 +619,7 @@ Respond in natural, conversational language:
             fallback_answer = f"Found **{result_df.iloc[0, 0]}** model(s) matching your criteria."
         else:
             fallback_answer = f"Found **{len(result_df)}** model(s) matching your criteria."
-        return fallback_answer, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        return fallback_answer, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}, None
 
 # ------------------------------------------------------------------------------
 # Main entry point
@@ -634,7 +652,7 @@ def run_inventory_query(question: str, accumulated_filters: dict,
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0,
-        }
+        }, None
 
     sql           = None
     result_df     = None
@@ -650,7 +668,8 @@ def run_inventory_query(question: str, accumulated_filters: dict,
             accumulated_filters,
             True,
             {"new_filters": {"LOB": "All LOBs"}},
-            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            None  # no offer
         )
 
     effective_filters = accumulated_filters.copy()
@@ -711,7 +730,7 @@ def run_inventory_query(question: str, accumulated_filters: dict,
         updated_filters = parsed.get("final_filters", accumulated_filters)
 
     # ── Natural language answer using ORIGINAL question for natural flow ──
-    nl_answer, nl_usage = generate_nl_response(
+    nl_answer, nl_usage, offer = generate_nl_response(
         question=question,
         result_df=result_df,
         turn_history=turn_history,
@@ -738,4 +757,4 @@ def run_inventory_query(question: str, accumulated_filters: dict,
         "total_tokens": total_prompt_tokens + total_completion_tokens,
     }
 
-    return nl_answer, show_df, updated_filters, topic_shift, parsed, usage_dict
+    return nl_answer, show_df, updated_filters, topic_shift, parsed, usage_dict, offer
