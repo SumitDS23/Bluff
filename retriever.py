@@ -1,48 +1,68 @@
 """
 rag/retriever.py
-Loads the FAISS vector store from local disk or GCS depending on config.
+Loads FAISS vector stores from local disk.
+
+Changes vs previous version:
+- load_retriever() now accepts a store parameter: "ml" | "general"
+- Reads from settings.local_index_path_ml or settings.local_index_path_general
+- Old single-store path (settings.local_index_path) kept as fallback alias
+  so existing code that hasn't migrated yet doesn't break
+- get_filtered_retriever() unchanged
 """
 
 import logging
 from pathlib import Path
+
 from langchain_community.vectorstores import FAISS
-from rag.embeddings import AzureEmbeddings          # ← Changed
+
+from rag.embeddings import AzureEmbeddings
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
 
-def load_retriever():
-    """
-    Load FAISS index and return a retriever.
-    - If USE_GCS=true: downloads index from GCS first
-    - Otherwise: loads from LOCAL_INDEX_PATH
-    """
-    embedding_model = AzureEmbeddings()              # ← Changed
-    local_path = settings.local_index_path
+# ──────────────────────────────────────────────────────────────────────────────
+# Store loader — parameterised
+# ──────────────────────────────────────────────────────────────────────────────
 
-    if settings.use_gcs:
-        logger.info("USE_GCS=true — downloading index from GCS...")
-        from storage.gcs import download_index
-        success = download_index(
-            bucket_name=settings.gcs_bucket,
-            gcs_prefix=settings.gcs_index_prefix,
-            local_path=local_path,
-        )
-        if not success:
-            raise FileNotFoundError(
-                f"FAISS index not found in GCS bucket '{settings.gcs_bucket}' "
-                f"at prefix '{settings.gcs_index_prefix}'. Run ingest first."
-            )
+def load_retriever(store: str = "ml"):
+    """
+    Load a FAISS retriever for the specified store.
+
+    Parameters
+    ----------
+    store : "ml" | "general"
+        "ml"      → faiss_index_ml      (model_doc, cde, framework, general)
+        "general" → faiss_index_general (newsletter, utility)
+
+    Returns
+    -------
+    (retriever, vectorstore)
+        Same tuple shape as before so main.py callers need minimal changes.
+    """
+    embedding_model = AzureEmbeddings()
+
+    # Resolve the correct index path
+    if store == "general":
+        local_path = settings.local_index_path_general
+        store_label = "General"
     else:
-        if not Path(local_path).exists():
-            raise FileNotFoundError(
-                f"FAISS index not found at '{local_path}'. Run ingest first."
-            )
+        # Default / "ml" — also handles legacy calls with no argument
+        local_path = settings.local_index_path_ml
+        store_label = "ML"
 
-    logger.info(f"Loading FAISS index from {local_path}...")
+    # Validate path exists
+    if not Path(local_path).exists():
+        raise FileNotFoundError(
+            f"FAISS [{store_label}] index not found at '{local_path}'. "
+            f"Run ingest/ingest.py first."
+        )
+
+    logger.info(f"Loading FAISS [{store_label}] index from: {local_path}")
+
     vector_store = FAISS.load_local(
-        local_path, embedding_model,
+        local_path,
+        embedding_model,
         allow_dangerous_deserialization=True,
     )
 
@@ -50,36 +70,37 @@ def load_retriever():
         search_type=settings.retrieval_mode,
         search_kwargs={"k": settings.retrieval_k},
     )
-    logger.info("Retriever ready")
+
+    logger.info(f"Retriever [{store_label}] ready")
     return retriever, vector_store
 
-# def _load_vectorstore():
-    # """Load FAISS vectorstore from disk."""
-    
-    # embeddings = AzureEmbeddings()
-    
-    # return FAISS.load_local(
-        # settings.local_index_path,
-        # embeddings,
-        # allow_dangerous_deserialization=True,
-    # )
-    
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Filtered retriever — unchanged, used by RAG flow in main.py
+# ──────────────────────────────────────────────────────────────────────────────
+
 def get_filtered_retriever(vectorstore, lob: str = None, function: str = None):
     """
-    Returns a retriever filtered by LOB and/or Function.
-    Falls back to unfiltered if no metadata matches.
-    """  
-    search_kwargs = {"k": settings.retrieval_k}  
-    # Build metadata filter
-    filter_dict = {}
+    Returns a retriever filtered by LOB and/or Function metadata.
+    Falls back to unfiltered search if no metadata filter is applicable.
+
+    Parameters
+    ----------
+    vectorstore : FAISS vectorstore object (returned from load_retriever)
+    lob         : LOB string to filter on, e.g. "ABSLI"
+    function    : Function string to filter on, e.g. "HR"
+    """
+    search_kwargs: dict = {"k": settings.retrieval_k}
+
+    filter_dict: dict = {}
     if lob and lob != "Unknown":
         filter_dict["lob"] = lob
     if function and function != "Unknown":
         filter_dict["function"] = function
-    
+
     if filter_dict:
         search_kwargs["filter"] = filter_dict
-    
+
     return vectorstore.as_retriever(
         search_type=settings.retrieval_mode,
         search_kwargs=search_kwargs,
