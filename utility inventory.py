@@ -4,9 +4,11 @@ DuckDB-backed Text-to-SQL engine for the Utility Inventory CSV.
 
 Mirrors the dashboard_inventory.py pattern exactly.
 
-Expected CSV columns (adjust COLUMN_DESCRIPTIONS if yours differ):
-  Utility_Name, LOB, Category, Description, Owner, Status,
-  Technology, Access_Link, Last_Updated
+Actual CSV columns (as per COE utility schema):
+  Sr_No, COE_LOB, Category_Tag, Utility_Name_&_Description,
+  Business_Problem_Statement_&_Use_Cases, Utility_Category,
+  Business_LOB_&_Sub_Function, Stakeholder_Name, Technical_SPOC,
+  Current_Status, Success_Metrics
 
 Usage:
     from rag.utility_inventory import create_utility_engine
@@ -32,15 +34,17 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────────────────
 
 COLUMN_DESCRIPTIONS = {
-    "Utility_Name":   "Name of the internal COE tool, script, notebook, or calculator",
-    "LOB":            "Line of Business the utility belongs to (ABSLI, ABHI, ABCD, ABSLAMC, ABHFL, CAU, ABFL-CA, ABFL-RA, General)",
-    "Category":       "Type of utility (e.g. Campaign, Monitoring, Reporting, Data Prep, Modelling)",
-    "Description":    "What the utility does and its business purpose",
-    "Owner":          "Team or person responsible for maintaining the utility",
-    "Status":         "Current state: Live, WIP, Deprecated",
-    "Technology":     "Tech stack used (Python, Excel, SQL, Power BI, etc.)",
-    "Access_Link":    "SharePoint or network path to access the utility",
-    "Last_Updated":   "Date the utility was last updated",
+    "Sr_No":                                  "Serial number / row identifier",
+    "COE_LOB":                                "Owner of the utility — either 'COE' (Center of Excellence) or a specific LOB (e.g. ABFL-CA, ABSLAMC, CoE). Use this for 'which team built it' questions.",
+    "Category_Tag":                           "High-level technology/capability tag (e.g. Document Intelligence & OCR, Voice & Sentiment Analytics, Customer Analytics & Linkage, Risk Monitoring & Early Warning, Data Extraction & Automation, Model Documentation & Governance, Credit Assessment & Underwriting)",
+    "Utility_Name_&_Description":             "Name of the utility followed by a short description of what it does. Use for name-based searches and 'what is X' questions.",
+    "Business_Problem_Statement_&_Use_Cases": "Detailed description of the business problem the utility solves and its key use cases. Use for 'what problem does X solve', 'use cases', or topic-based searches.",
+    "Utility_Category":                       "Technical classification of the utility (e.g. AI/ML/Non-ML, Non-ML / Automation, AI / NLP / Voice Analytics, Risk Analytics / Bureau Intelligence / Early Warning System, Automation)",
+    "Business_LOB_&_Sub_Function":            "The LOB and business function that consumes or benefits from the utility (e.g. Secured Lending (Credit Risk / Operations / Legal), AMC Analytics, NBFC-RA & ABCD (Credit Risk)). Use for 'which LOB uses X' questions.",
+    "Stakeholder_Name":                       "Business stakeholder / sponsor name (e.g. Head of Secured Lending, Saket Rakhe, Aman Gupta)",
+    "Technical_SPOC":                         "Technical single point of contact / developer name (e.g. AI Engineering Lead, Makineni Vamsi, Angshuman Pandey, Harsh Jaykumar)",
+    "Current_Status":                         "Current deployment status of the utility. Values include: Testing Phase, Development, POC In-Progress, Implemented, Developed and Deployed, In Development, Pilot Use Case",
+    "Success_Metrics":                        "Quantified or qualitative outcomes achieved (e.g. 17 man hours saved, 80% cost reduction, ₹24.6 Cr risky disbursals prevented). May be empty for early-stage utilities.",
 }
 
 
@@ -65,15 +69,34 @@ Sample data (first 3 rows):
 
 Rules:
 1. Use ONLY column names listed above — no invented columns.
-2. All string comparisons must be case-insensitive: use LOWER(col) LIKE LOWER('%value%')
-3. For LOB filtering: match partial names too
-   e.g. LOWER(LOB) LIKE '%absli%' catches "ABSLI", "ABSLI Team" etc.
-4. COUNT queries: SELECT COUNT(*) AS utility_count FROM utility_inventory WHERE ...
-5. LIST queries:  SELECT Utility_Name, LOB, Category, Description, Status
-                  FROM utility_inventory WHERE ... ORDER BY LOB, Utility_Name
-6. For "what does X do" or "describe X": fetch Description, Owner, Technology, Access_Link
-7. Return ALL matching rows — do NOT add LIMIT unless the user asks for top-N.
-8. Return ONLY the raw SQL query — no markdown, no explanation, no backticks.
+2. All string comparisons MUST be case-insensitive: use LOWER(col) LIKE LOWER('%value%')
+3. LOB / owner filtering:
+   - "COE utilities"     → LOWER("COE_LOB") LIKE '%coe%'
+   - "ABFL-CA utilities" → LOWER("COE_LOB") LIKE '%abfl%' OR LOWER("Business_LOB_&_Sub_Function") LIKE '%abfl%'
+   - Always check BOTH COE_LOB and Business_LOB_&_Sub_Function for LOB questions
+4. Status filtering:
+   - "live" / "deployed"    → LOWER("Current_Status") LIKE '%implemented%' OR LOWER("Current_Status") LIKE '%deployed%'
+   - "in progress" / "WIP"  → LOWER("Current_Status") LIKE '%development%' OR LOWER("Current_Status") LIKE '%progress%' OR LOWER("Current_Status") LIKE '%testing%'
+5. COUNT queries:
+   SELECT COUNT(*) AS utility_count FROM utility_inventory WHERE ...
+6. LIST queries (default columns for listing):
+   SELECT "Sr_No", "COE_LOB", "Category_Tag", "Utility_Name_&_Description", "Current_Status"
+   FROM utility_inventory WHERE ... ORDER BY "COE_LOB", "Sr_No"
+7. DETAIL queries ("what does X do", "describe X", "use cases for X"):
+   SELECT "Utility_Name_&_Description", "Business_Problem_Statement_&_Use_Cases",
+          "Utility_Category", "Business_LOB_&_Sub_Function",
+          "Stakeholder_Name", "Technical_SPOC", "Current_Status", "Success_Metrics"
+   FROM utility_inventory WHERE LOWER("Utility_Name_&_Description") LIKE '%keyword%'
+8. SPOC / stakeholder queries:
+   SELECT "Utility_Name_&_Description", "Stakeholder_Name", "Technical_SPOC", "Current_Status"
+   FROM utility_inventory WHERE ...
+9. SUCCESS METRICS queries:
+   SELECT "Utility_Name_&_Description", "Success_Metrics", "Current_Status"
+   FROM utility_inventory WHERE "Success_Metrics" IS NOT NULL AND "Success_Metrics" != 'nan'
+10. Return ALL matching rows — do NOT add LIMIT unless user asks for top-N.
+11. Column names that contain special characters (&, /) MUST be double-quoted in SQL.
+    e.g. "Utility_Name_&_Description", "Business_LOB_&_Sub_Function"
+12. Return ONLY the raw SQL — no markdown fences, no explanation, no backticks.
 
 User question: {question}
 SQL:"""
@@ -90,7 +113,9 @@ def _build_answer_prompt(question: str, sql: str, result_df: pd.DataFrame) -> st
         result_text = result_df.to_string(index=False)
 
     return f"""
-You are a helpful COE Analytics assistant answering questions about internal utilities and tools.
+You are a helpful COE Analytics assistant answering questions about internal
+COE utilities — tools, scripts, AI/ML solutions, and automation built by the
+Center of Excellence and LOB analytics teams.
 
 User question: {question}
 
@@ -100,13 +125,23 @@ Query result:
 {result_text}
 
 Instructions:
-- If no results: say no matching utilities were found and suggest the user check the SharePoint folder.
-- If results exist: give a clear, concise natural language summary.
-- For counts: state the number directly ("There are X utilities in ABSLI").
-- For lists: briefly introduce the list, then reference the table below (do not repeat rows).
-- For descriptions: explain what the utility does in 2-3 sentences.
-- Do NOT mention SQL, DuckDB, or technical internals.
-- Keep the tone professional but conversational.
+- If no results: say no matching utilities were found and suggest the user
+  check the SharePoint Utility folder for the latest inventory.
+- If results exist: give a clear, concise natural language summary first,
+  then reference the table shown below for full details.
+- For COUNT questions: state the number directly
+  e.g. "There are 3 utilities owned by COE."
+- For LIST questions: give a 1-line intro then mention the table has the details.
+  Do NOT repeat every row in prose.
+- For DETAIL / "what does X do" questions: summarise the utility purpose
+  (2-3 sentences), mention the business problem it solves, key use cases,
+  current status, and SPOC if available.
+- For SUCCESS METRICS questions: highlight the quantified outcomes
+  (man-hours saved, cost reduction, disbursals prevented etc.).
+- For SPOC / stakeholder questions: list name and their associated utility clearly.
+- Do NOT mention SQL, DuckDB, or any technical query internals.
+- Do NOT fabricate information not present in the query result.
+- Keep tone professional but conversational.
 """
 
 
@@ -134,12 +169,25 @@ class UtilityInventoryEngine:
 
         df = pd.read_csv(path)
 
-        # Normalise column names — strip spaces, replace spaces with underscores
+        # Normalise column names:
+        # strip whitespace, replace spaces → underscores
+        # keep & and / as-is (DuckDB handles them fine when double-quoted)
         df.columns = [c.strip().replace(" ", "_") for c in df.columns]
 
-        # Strip whitespace from all string columns
+        # Clean string columns:
+        # - strip leading/trailing whitespace
+        # - collapse internal newlines (multiline cells from Excel exports)
         for col in df.select_dtypes(include="object").columns:
-            df[col] = df[col].astype(str).str.strip()
+            df[col] = (
+                df[col]
+                .astype(str)
+                .str.strip()
+                .str.replace(r"\n+", " ", regex=True)
+                .str.replace(r"\r+", " ", regex=True)
+            )
+
+        # Replace literal "nan" strings (from pd.read_csv on empty cells) with None
+        df = df.replace("nan", None)
 
         self.conn.execute(
             "CREATE TABLE utility_inventory AS SELECT * FROM df"
