@@ -8,10 +8,14 @@ Changes vs previous version:
 - Added RouterDecision.category field (drives both SharePoint link + store selection)
 - Replaced hardcoded utility_link with SHAREPOINT_LINKS registry
 - Added format_link_html() helper consumed by main.py
-- Updated ROUTER_PROMPT: UTILITY intent + category instruction
+- Updated ROUTER_PROMPT: UTILITY intent + category instruction + disambiguation rules
 - Removed URL from prompt (LLM never generates URLs)
 - Updated last_intent context hint for UTILITY
 - BUTTON_CLICKS now use format_link_html() per category
+- Fix 1: UTILITY_KEYWORDS pre-LLM keyword list covers business-function language
+         and all actual Category_Tags from the utility inventory CSV
+- Fix 2: ROUTER_PROMPT examples expanded with real utility names and natural phrasing
+- Fix 3: UTILITY vs RAG disambiguation rule added (existence query vs concept query)
 """
 
 import logging
@@ -172,20 +176,39 @@ INTENT DEFINITIONS
      Automation Level, Distribution Method, Teams, Stakeholders
    - Counting, listing, filtering DASHBOARDS / MIS / Reports
 
-4. UTILITY (Vector Store — General)
-   - Questions about internal COE tools, scripts, notebooks,
-     calculators, templates, or productivity aids
-   - "What utilities are available for ABSLI?"
-   - "Is there a campaign sizing tool?"
-   - "Show me utilities for model monitoring"
-   - "What does the churn calculator do?"
-   - "Which utilities does ABCD have?"
+4. UTILITY (DuckDB — Utility Inventory)
+   The utility inventory contains internal COE-built solutions including:
+     - AI/ML platforms, automation scripts, NLP/voice engines
+     - Credit assessment tools, risk monitoring systems
+     - Data extraction & web scraping utilities
+     - Model documentation generators
+     - Customer analytics & linkage tools
+     - OCR and document intelligence platforms
+
+   Route to UTILITY when the user asks about:
+   a) EXISTENCE — "is there a tool/solution/utility for X?"
+      "do we have anything for X?", "any automation for X?"
+   b) DISCOVERY — "what tools/utilities/solutions does [LOB] have?"
+      "list all COE tools", "show me what's available"
+   c) SPECIFIC NAMED TOOLS — any question about a tool by name:
+      "Voice Analytics Engine", "Family ID", "Web Scraping Utility",
+      "CAM Automation", "FCHR", "Multi Enquiry Trigger",
+      "Model Documentation Utility", "Property Document Intelligence"
+   d) SPOC / OWNERSHIP — "who built X?", "who is the SPOC for X?",
+      "which team owns the web scraping tool?"
+   e) STATUS / METRICS — "which utilities are live?",
+      "what are the success metrics for COE tools?",
+      "how many utilities are in testing phase?"
+   f) BUSINESS FUNCTION SEARCH — "any tool for credit underwriting?",
+      "is there something for risk monitoring?",
+      "what does COE have for document automation?"
 
 5. RAG (Vector Store — ML)
-   - How a model works: methodology, algorithms, features
+   - How a specific model works: methodology, algorithms, features
    - Model documentation content: objectives, target variables
    - Standards, best practices, MLOps guidelines
    - Newsletter content, CDE definitions, governance policies
+   - Conceptual explanations: "what is X?", "how does X work?"
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ROUTING RULES
@@ -201,7 +224,7 @@ ALWAYS ROUTE TO GREETING for:
   "tell me more", "show me", "list them", "go ahead"
   MUST use the previous intent context — NEVER classify as GREETING.
 
-ALWAYS ROUTE TO INVENTORY for ANY question involving MODELS:
+ALWAYS ROUTE TO INVENTORY for ANY question involving AI/ML MODELS:
 - Counting: "how many models", "count models", "total models"
 - Listing:  "list models", "show models", "which models"
 - Status:   "live models", "WIP models", "in progress models"
@@ -214,28 +237,51 @@ ALWAYS ROUTE TO DASHBOARD for ANY question involving DASHBOARDS/MIS:
 - Data sources for dashboards (SAP BO, Databricks, BigQuery, FinnCorp)
 - Business function: "sales dashboards", "operations dashboards"
 
-ALWAYS ROUTE TO UTILITY for ANY question involving TOOLS/UTILITIES:
-- "utilities available for [LOB]", "is there a tool for X"
-- "show me utilities", "what does [utility name] do"
-- Internal scripts, notebooks, calculators, templates
+ALWAYS ROUTE TO UTILITY for:
+- ANY question about whether a tool/solution/automation EXISTS
+- ANY question about a named COE utility or platform
+- ANY "do we have / is there / any tool for" phrasing
+- Listing, counting, or filtering COE-built tools/solutions
+- SPOC, ownership, status, or success metrics of utilities
 
 ONLY ROUTE TO RAG for:
-- How a specific model works technically
-- Methodology, approach, algorithm used
-- Process explanations requiring document reading
-- Policy or guideline content
-- Exhaustive model details (objectives, target variable, features)
-- Newsletter content, CDE definitions
+- How a specific AI/ML model works technically (methodology)
+- Conceptual questions: "what is MLOps?", "explain X"
+- Policy, governance, or standards document content
+- Newsletter content, CDE field definitions
+- Exhaustive model details requiring document reading
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CRITICAL DISAMBIGUATION
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 KEYWORD PRIORITY:
-  "model" / "models"           → INVENTORY
-  "dashboard" / "MIS"          → DASHBOARD
-  "utility" / "tool" / "script"→ UTILITY
-  "how does" / "methodology"   → RAG
+  "model" / "models"             → INVENTORY  (AI/ML model registry)
+  "dashboard" / "MIS" / "report" → DASHBOARD
+  "utility" / "tool" / "script" / "solution" / "platform" / "engine"
+                                 → UTILITY
+  "how does" / "methodology" / "explain" / "what is"
+                                 → RAG
+
+UTILITY vs RAG — THE KEY DISTINCTION:
+  The question is: does the user want to FIND something, or UNDERSTAND something?
+
+  FIND (existence / discovery / capability) → UTILITY
+    "Is there a voice analytics solution?"           → UTILITY
+    "Do we have an OCR tool for property documents?" → UTILITY
+    "What does the Voice Analytics Engine do?"       → UTILITY  ← named tool = UTILITY
+    "Tell me about the Family ID utility"            → UTILITY
+    "Who built the CAM automation platform?"         → UTILITY
+    "Which COE tools are in testing phase?"          → UTILITY
+    "Any automation for credit assessment?"          → UTILITY
+
+  UNDERSTAND (concept / methodology) → RAG
+    "How does voice analytics work?"                 → RAG  ← generic concept
+    "What is sentiment analysis?"                    → RAG
+    "Explain OCR technology"                         → RAG
+
+  RULE: If a specific named COE tool/platform is mentioned → always UTILITY.
+        If the question is generic / conceptual with no named tool → RAG.
 
 DATA SOURCE CONTEXT:
   "Data sources used in [LOB]" (no other context) → DASHBOARD
@@ -272,15 +318,25 @@ DASHBOARD:
 "What are the data sources for sales dashboards?"   -> DASHBOARD
 "Which dashboards are updated daily?"               -> DASHBOARD
 
-UTILITY:
+UTILITY — natural business language (no "utility" keyword needed):
 "What utilities are available for ABCD?"            -> UTILITY
-"Is there a campaign sizing tool?"                  -> UTILITY
-"Show me utilities for model monitoring"            -> UTILITY
-"What does the churn calculator do?"                -> UTILITY
-"Which utilities does ABSLI have?"                  -> UTILITY
-"List all COE utilities"                            -> UTILITY
+"Is there a tool for automated CAM generation?"     -> UTILITY
+"Do we have anything for web scraping?"             -> UTILITY
+"Is there an OCR solution for property documents?"  -> UTILITY
+"What does the Voice Analytics Engine do?"          -> UTILITY
+"Tell me about the Family ID utility"               -> UTILITY
+"Is there something for credit underwriting automation?" -> UTILITY
+"Which COE tools are in testing phase?"             -> UTILITY
+"Who is the SPOC for the web scraping tool?"        -> UTILITY
+"What are the success metrics for COE utilities?"   -> UTILITY
+"Any tool that helps prevent risky disbursals?"     -> UTILITY
+"Show me document intelligence solutions"           -> UTILITY
+"What automation tools does COE have?"              -> UTILITY
+"List all utilities built by COE"                   -> UTILITY
+"Which utilities does ABFL-CA have?"                -> UTILITY
+"Is there a model documentation generator?"         -> UTILITY
 
-RAG:
+RAG — concepts, methodology, standards:
 "How does the persistency model work?"              -> RAG
 "What methodology is used for fraud?"               -> RAG
 "Explain the churn prediction approach"             -> RAG
@@ -288,18 +344,23 @@ RAG:
 "Share exhaustive details for the MF Intent Model"  -> RAG
 "What is MLOps?"                                    -> RAG
 "What was in the Dec25 newsletter?"                 -> RAG
+"How does voice analytics work?"                    -> RAG
+"What is sentiment analysis?"                       -> RAG
+"Explain OCR technology"                            -> RAG
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 INTENT FLOWCHART
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Step 1: GREETING keywords present?          → GREETING
-Step 2: "model" / "models" keyword?         → INVENTORY
-Step 3: "dashboard" / "MIS" keyword?        → DASHBOARD
-Step 4: "utility" / "tool" / "calculator"?  → UTILITY
-Step 5: "how does" / "methodology" / "explain"? → RAG
-Step 6: Data source context (see above)
-Step 7: Default (no keywords matched)       → INVENTORY
+Step 1: GREETING keywords present?                  → GREETING
+Step 2: "model" / "models" keyword?                 → INVENTORY
+Step 3: "dashboard" / "MIS" keyword?                → DASHBOARD
+Step 4: Named COE tool/platform mentioned?          → UTILITY
+Step 5: "is there" / "do we have" / "any tool for"? → UTILITY
+Step 6: "utility" / "tool" / "solution" / "engine"? → UTILITY
+Step 7: "how does" / "methodology" / "explain" / "what is"? → RAG
+Step 8: Data source context (see above)
+Step 9: Default (no keywords matched)               → INVENTORY
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CATEGORY FIELD — REQUIRED IN EVERY RESPONSE
@@ -388,13 +449,53 @@ def classify_intent(question: str, last_intent: str = "") -> RouterDecision:
     data_keywords = {
         "live", "wip", "model", "count", "list", "how many", "show",
         "absli", "abhi", "abcd", "dashboard", "mis", "report",
-        "utility", "tool", "calculator",
+        "utility", "tool", "calculator", "solution", "platform", "engine",
+        "script", "automat",
     }
     if len(question.strip()) <= 10 and not any(kw in question_lower for kw in data_keywords):
         logger.info(f"Short message detected: '{question}' → GREETING")
         return RouterDecision(
             intent=Intent.GREETING,
             reasoning="Short non-specific message",
+            category="utility",
+        )
+
+    # ── Step 3b: UTILITY keyword pre-check (before LLM) ──────────────────
+    # Covers business-function language users naturally use — they won't say
+    # "utility", they'll say "is there a tool for X" or name the platform.
+    # Ordered from most specific (named tools) to most general.
+    UTILITY_KEYWORDS = [
+        # Named COE tools from the utility inventory
+        "voice analytics engine", "family id", "web scraping utility",
+        "cam automation", "fchr", "multi enquiry trigger",
+        "model documentation utility", "property document intelligence",
+        "bl fchr", "bل fchr",
+        # Category tags
+        "document intelligence", "ocr solution", "ocr tool",
+        "voice analytics", "sentiment analytics", "credit assessment tool",
+        "risk monitoring tool", "data extraction tool",
+        # Existence / discovery phrasing — strongest UTILITY signals
+        "is there a tool", "is there an", "do we have a", "do we have an",
+        "any tool for", "any utility for", "any solution for",
+        "any automation for", "something for automating",
+        "is there something", "do we have something",
+        # General capability search
+        "what tools", "what utilities", "what solutions", "what automation",
+        "list all utilities", "list all tools", "list coe utilities",
+        "show me utilities", "show me tools", "available utilities",
+        "available tools", "coe tools", "coe utilities",
+        # SPOC / ownership of tools
+        "spoc for the", "who built the", "who owns the tool",
+        "technical spoc", "who developed the",
+        # Status / metrics of tools
+        "utilities in testing", "tools in testing", "tools in development",
+        "success metrics for", "utilities deployed", "tools deployed",
+    ]
+    if any(kw in question_lower for kw in UTILITY_KEYWORDS):
+        logger.info(f"Utility keyword pre-check matched: '{question}' → UTILITY")
+        return RouterDecision(
+            intent=Intent.UTILITY,
+            reasoning="Utility keyword pre-check matched",
             category="utility",
         )
 
